@@ -1,0 +1,210 @@
+<?php include 'templates/top.php'; ?>
+
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <title>Webcam Real Time </title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+    <div style="max-width: 100%;width: 642px;margin: 0 auto;text-align: center;background: #0077ce;color: #fff;font-family: arial;">
+      <p id="recive_txt" style="padding: 15px 15px;margin: 0;">Caught in the camera lens:<br> <img id="img_new" src=""></p>
+    </div>
+
+    <div id="video_pane" style="margin: auto; border: 1px solid black; display: table; max-width: 100%;">
+            <img id="browser_video" class="video-image" alt="video" src="/video" style="max-width: 100%;">
+    </div>
+  
+    <div id="audio_pane" style="margin: auto; display: table;">
+      <audio id="html5_audio"  controls="">
+        <source src="/audio.wav" type="audio/wav">
+      </audio>
+    </div>
+
+    <center>
+        <button id="audiotostart" onclick="twaStart(); document.getElementById('html5_audio').stop()">Play audio from pc to phone</button>
+        <button id="audiotostop" onclick="twaStop(); document.getElementById('html5_audio').play()">Stop audio from pc to phone</button>
+        <br>
+        <button id="audiotostop" onclick="window.location.href = window.location.pathname + window.location.search + window.location.hash;">Refresh Page</button>
+    </center>
+
+    <script>
+      var wsAudioCtx = null;
+      var micStream = null;
+      var twaWebsocket = null;
+      var twaPressed = false;
+      var twaMicStream = null;
+      var twaInit = function(successFunc) {
+          "use strict";
+          var soundNotAllowed = function (error) {
+
+          }
+          var navigator = navigator || window.navigator;
+          navigator.getUserMedia =  navigator.getUserMedia       ||
+            navigator.webkitGetUserMedia ||
+            navigator.mozGetUserMedia    ||
+            navigator.mediaDevices.getUserMedia ||
+            null;
+          navigator.getUserMedia({audio:true}, twaSoundAllowed, soundNotAllowed);
+      }
+
+      var twaConnectWebsocket = function() {
+          if (twaWebsocket) {
+              if (twaWebsocket.readyState == 1) {
+                  return
+              }
+              twaWebsocket.onclose = undefined
+              twaWebsocket.close()
+              twaWebsocket = null
+          }
+          //get audio in
+          twaWebsocket = new WebSocket('wss://websocketCameraIP:8080/audioin.wav')
+          twaWebsocket.wroteWavHeader = false
+          twaWebsocket.onopen = function() {
+              twaInit()
+          }
+          twaWebsocket.onclose = function() {
+              twaWebsocket = null
+              setTimeout(function() {
+
+              }, 500)
+          }
+      }
+
+      var twaSoundAllowed = function (stream) {
+          twaMicStream = stream;
+          window.persistAudioStream = stream;
+          wsAudioCtx = new AudioContext();
+
+          micStream = wsAudioCtx.createMediaStreamSource(stream);
+          var scriptNode = wsAudioCtx.createScriptProcessor(4096, 1, 1);
+          scriptNode.onaudioprocess = function(audioProcessingEvent) {
+              if (!twaWebsocket) {
+                  return;
+              }
+              var inputBuffer = audioProcessingEvent.inputBuffer;
+              var inData = inputBuffer.getChannelData(0);
+              if (!twaWebsocket.wroteWavHeader) {
+                  twaWebsocket.wroteWavHeader = true;
+                  twaWebsocket.send(wavHeader(wsAudioCtx.sampleRate))
+              }
+              if (twaWebsocket && twaWebsocket.readyState == 1) {
+                  var buffer = new ArrayBuffer(inData.length * 2);
+                  var view = new DataView(buffer);
+
+                  for (var i = 0; i<inData.length; i++) {
+                      view.setInt16(i * 2, 0x7ffe * inData[i], true)
+                  }
+                  twaWebsocket.send(buffer)
+              }
+          }
+          micStream.connect(scriptNode)
+          scriptNode.connect(wsAudioCtx.destination);
+      }
+
+      var twaStart = function () {
+          if (!twaWebsocket) {
+              return twaConnectWebsocket()
+          }
+          if (twaWebsocket.readyState == 1) {
+              twaInit()
+          }
+      };
+
+      function writeUTFBytes(view, offset, string){
+        var lng = string.length;
+        for (var i = 0; i < lng; i++) {
+          view.setUint8(offset + i, string.charCodeAt(i));
+        }
+      }
+
+      var wavHeader = function(sampleRate) {
+          var buffer = new ArrayBuffer(44);
+          var view = new DataView(buffer);
+          writeUTFBytes(view, 0, 'RIFF');
+          view.setUint32(4, 0xffffffff, true);
+          writeUTFBytes(view, 8, 'WAVE');
+          writeUTFBytes(view, 12, 'fmt ');
+          view.setUint32(16, 16, true);
+          view.setUint16(20, 1, true);
+          view.setUint16(22, 1, true);
+          view.setUint32(24, sampleRate, true);
+          view.setUint32(28, sampleRate * 2, true);
+          view.setUint16(32, 2, true);
+          view.setUint16(34, 16, true);
+          writeUTFBytes(view, 36, 'data');
+          view.setUint32(40, 0xffffffff, true);
+          return buffer
+      }
+      var twaStop = function() {
+          if (twaWebsocket) {
+            twaWebsocket.onclose = undefined
+            twaWebsocket.close()
+            twaWebsocket = null
+          }
+          if (wsAudioCtx) {
+              wsAudioCtx.suspend()
+              twaMicStream.getTracks()[0].stop()
+          }
+      }
+      //twaStart()
+      //twaStop()
+
+
+      var websocket = new WebSocket("ws://websocketIP:9999/ws");
+      websocket.onmessage = function(str) {
+        //console.log("Someone sent: ", str.data);
+        //document.getElementById('recive_txt').innerHTML = str.data;
+        document.getElementById("img_new").src = str.data;
+
+      };
+
+      /*// Tell the server this is client 1 (swap for client 2 of course)
+      websocket.send(JSON.stringify({
+        id: "client1"
+      }));
+
+      // Tell the server we want to send something to the other client
+      websocket.send(JSON.stringify({
+        to: "client2",
+        data: "foo"
+      }));*/
+      //document.getElementById('html5_audio').play();
+
+      function notifyMe() {
+        // Let's check if the browser supports notifications
+        if (!("Notification" in window)) {
+          alert("This browser does not support desktop notification");
+        }
+
+        // Let's check if the user is okay to get some notification
+        else if (Notification.permission === "granted") {
+          // If it's okay let's create a notification
+          var notification = new Notification("Hi there!");
+        }
+
+        // Otherwise, we need to ask the user for permission
+        // Note, Chrome does not implement the permission static property
+        // So we have to check for NOT 'denied' instead of 'default'
+        else if (Notification.permission !== 'denied') {
+          Notification.requestPermission(function (permission) {
+
+            // Whatever the user answers, we make sure we store the information
+            if(!('permission' in Notification)) {
+              Notification.permission = permission;
+            }
+
+            // If the user is okay, let's create a notification
+            if (permission === "granted") {
+              var notification = new Notification("Hi there!");
+            }
+          });
+        }
+
+        // At last, if the user already denied any notification, and you 
+        // want to be respectful there is no need to bother him any more.
+      }
+    </script>
+</body>
+</html>
